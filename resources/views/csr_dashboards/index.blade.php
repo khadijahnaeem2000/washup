@@ -17,6 +17,10 @@
             display: none;
             /* height: 100%; */
         }
+        .custom-modal {
+    width: 450px; /* Adjust the width as needed */
+}
+
     </style>
 
  <!-- @include( '../sweet_script') -->
@@ -340,29 +344,29 @@
                     </div>
                     
 
-                    <div class="card-body">
-                        <div style="width: 100%; padding-left: -10px; ">
-                            <div class="table-responsive">
-                                <table id="payment_order_table" class="table" style="width: 100%;" cellspacing="0">
-                                <thead>
-                                    <tr>
-                                        <th width="2%" ></th>
-                                        <th width="3%" >#</th>
-                                        <th width="15%" >Customer</th>
-                                        <th width="10%" >Contact#</th>
-                                        <th width="20%" >Address</th>
-                                        <th width="10%" >Bill</th>
-                                        <th width="15%" >Ride Date</th>
-                                        <th width="15%" >Timeslot</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
+                    <!--<div class="card-body">-->
+                    <!--    <div style="width: 100%; padding-left: -10px; ">-->
+                    <!--        <div class="table-responsive">-->
+                    <!--            <table id="payment_order_table" class="table" style="width: 100%;" cellspacing="0">-->
+                    <!--            <thead>-->
+                    <!--                <tr>-->
+                    <!--                    <th width="2%" ></th>-->
+                    <!--                    <th width="3%" >#</th>-->
+                    <!--                    <th width="15%" >Customer</th>-->
+                    <!--                    <th width="10%" >Contact#</th>-->
+                    <!--                    <th width="20%" >Address</th>-->
+                    <!--                    <th width="10%" >Bill</th>-->
+                    <!--                    <th width="15%" >Ride Date</th>-->
+                    <!--                    <th width="15%" >Timeslot</th>-->
+                    <!--                </tr>-->
+                    <!--            </thead>-->
+                    <!--            <tbody>-->
                                        
-                                </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
+                    <!--            </tbody>-->
+                    <!--            </table>-->
+                    <!--        </div>-->
+                    <!--    </div>-->
+                    <!--</div>-->
                 </div>
             {!! Form::close() !!}
             <!--end::Card-->
@@ -477,10 +481,42 @@
                                         @if ($errors->has('cus_address_id'))  
                                             {!! "<span class='span_danger'>". $errors->first('cus_address_id')."</span>"!!} 
                                         @endif
-                                        {!! Form::hidden('area_id',null, array('class' => 'form-control','id'=>'area_id','readonly'=>'true')) !!}
+                                        {!! Form::hidden('area_id',null, array('class' => 'form-control','id'=>'area_id','readonly'=>'false')) !!}
                                     </div>
-                                </div>
+                                </div> 
                             </div>
+                            <div class="row">
+                                <div class="col-lg-6 col-md-6 col-sm-12 col-xs-12">
+                                       
+                                   <div class="form-group">
+                                       {!! Html::decode(Form::label('email','Email Address <span class="text-danger">*</span>')) !!}
+                                       {{ Form::email('email', null, array('placeholder' => 'Enter email address','class' => 'form-control','readonly' => 'true' )) }}
+                                        @if ($errors->has('email'))  
+                                          {!! "<span class='span_danger'>". $errors->first('email')."</span>"!!} 
+                                        @endif
+                                   </div> 
+                            
+                                </div>
+                                @can('waive_delivery')
+                              <div class="col-lg-6 col-md-6 col-sm-12 col-xs-12">
+                                    <div class="form-group">
+                                       {!! Html::decode(Form::label('waver_delivery','Waive Delivery <span class="text-danger">*</span>')) !!}
+                                      <span class="switch switch-outline switch-icon switch-primary">
+                                                <label>
+                                                  {!! Form::checkbox('waver_delivery',1,false,  array('class' => 'form-control')) !!}
+                                                   <span></span>
+                                               </label>
+                                       </span>
+                                
+                                        @if ($errors->has('waver_delivery'))  
+                                        {!! "<span class='span_danger'>". $errors->first('waver_delivery')."</span>"!!} 
+                                    @endif
+                                </div>
+                                </div>
+                                @endcan
+                            </div>
+                  
+
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-light-primary font-weight-bold" data-dismiss="modal">Close</button>
@@ -563,7 +599,6 @@
                 $('#order_form').trigger("reset");
                 $('#modelHeading').html("Add new Order");
                 $('#order_ajax_model').modal('show');
-                
                 $("#contact_no").prop("readonly", false);
                 $('#cus_address_id').find('option').remove();
             });
@@ -604,6 +639,8 @@
                     $('#contact_no').val(data.contact_no);
                     $("#contact_no").prop("readonly", true);
                     $('#name').val(data.name);
+                   $('#waver_delivery').prop('checked', data.waver_delivery);
+                    $('#email').val(data.email);
                     show_details(data.contact_no);  // calling show_detail fn to get customer details and addresses
                     $('#status_id').val(data.status_id);
                    
@@ -865,7 +902,7 @@
             // BEGIN:: fn storing to add or update the order data 
             function storing(cus_url){
                 var area_id = $('#area_id').val();
-
+                   
                 if(area_id == ""){
                     console.log("blank");
                     $('#save_btn').html('Save');
@@ -985,7 +1022,7 @@
             $('.dpicker').datepicker({
                 startDate: new Date(),
                 format: 'yyyy/mm/dd',
-                daysOfWeekDisabled: [0],
+                // daysOfWeekDisabled: [0],
                 beforeShowDay: function(date){
                     dmy = date.getDate() + "-" + (date.getMonth() + 1) + "-" + date.getFullYear();
                     if(disableSpecificDates.indexOf(dmy) != -1){
@@ -1087,33 +1124,105 @@
             // var contact_no = document.getElementById('contact_no').value;  
             // show_details(contact_no);
         });
-        function show_details($contact_no){
-            var token = $("input[name='_token']").val();
-            $.ajax({
-                url: "{{ url('fetch_customer_details') }}",
-                method: 'POST',
-                data: {contact_no:$contact_no, _token:token},
-                success: function(data) {
-                    if(data.data){
-                        $('#name').val(data.data.name);
-                        $('#customer_id').val(data.data.id);
-                        $('#permanent_note').val(data.data.permanent_note);
-                        $("#cus_address_id").html(data.customer_address);
-                        var id = document.getElementById('cus_address_id').value;  
-                        setTimeout(() => {     
-                            get_customer_lat_lng(id);
-                        }, 500);
-                       
-                        
-                    }else{
-                        $('#name').val('');
-                        $('#customer_id').val('');
-                        $('#permanent_note').val('');
-                        $("#cus_address_id").html('<option>Please Select Address</option>');
-                    }
-                }
-            });
-        }
+           // start khadeeja's edit 
+     function show_details($contact_no) {
+      var token = $("input[name='_token']").val();
+      $.ajax({
+         url: "{{ url('fetch_customer_details') }}",
+         method: 'POST',
+         data: { contact_no: $contact_no, _token: token },
+         success: function(data) {
+            if (data.data) {
+               $('#name').val(data.data.name);
+               $('#email').val(data.data.email);
+               $('#customer_id').val(data.data.id);
+               $('#permanent_note').val(data.data.permanent_note);
+               $("#cus_address_id").html(data.customer_address);
+               var id = document.getElementById('cus_address_id').value;
+               setTimeout(() => {
+                  get_customer_lat_lng(id);
+               }, 500);
+               $email = data.data.email;
+               var Idcustomer = data.data.id;
+               // Check if email is missing
+               if (!data.data.email) {
+                  $("#loaderDiv").hide();
+                  // Show error message with two options
+                  Swal.fire({
+                     title: 'Are you sure?',
+                     html: '<div style="font-weight: 14px;font-size:14px">Customer will not receive Digital Invoice!</div>',
+                     icon: 'warning',
+                     showCancelButton: true,
+                     confirmButtonColor: '#3085d6',
+                     cancelButtonColor: '#d33',
+                     confirmButtonText: 'Yes, proceed!',
+                     cancelButtonText: 'No, Add Email!',
+                  }).then((result) => {
+                     console.log(result);
+                     if (result.isConfirmed) {
+                        // Proceed with the operation (Save the order)
+                        var url = "{{ route('csr_dashboards.index') }}" + '/add_order/';
+                        storing(url);
+                     } else {
+                        var url = "{{ url('customers/:customer_id/edit') }}";
+                                 url = url.replace(':customer_id', Idcustomer);
+                                 window.location.href = url;
+                     }
+                  });
+               } else if (data.data.email) {
+                  $.ajax({
+                     url: "{{ url('fetch_email_details') }}",
+                     method: 'POST',
+                     data: { contact_no: $contact_no, _token: token },
+                     success: function(data) {
+                        if (data.data) {
+                           console.log("success");
+                           console.log(data.data);
+                        } else {
+                           var customer_id = data.error;
+                           $("#loaderDiv").hide();
+                          Swal.fire({
+    title: 'Are you sure?',
+    html: '<div style="font-weight: 14px;font-size:14px">Email alerts are turned off.<br>Customer will not receive Digital Invoice!</div>',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#3085d6',
+    cancelButtonColor: '#d33',
+    confirmButtonText: 'Yes, proceed!',
+    cancelButtonText: 'No, turn on alerts!',
+    customClass: {
+        popup: 'custom-modal'
+    }
+}).then((result) => {
+    console.log(result);
+    if (result.isConfirmed) {
+        // Proceed with the operation (Save the order)
+        var url = "{{ route('csr_dashboards.index') }}" + '/add_order/';
+        storing(url);
+    } else {
+        var url = "{{ url('customers/:customer_id/edit') }}";
+        url = url.replace(':customer_id', customer_id);
+        window.location.href = url;
+    }
+});
+
+
+                        }
+                     }
+                  })
+               }
+
+            } else {
+               $('#name').val('');
+               $('#customer_id').val('');
+               $('#permanent_note').val('');
+               $("#cus_address_id").html('<option>Please Select Address</option>');
+            }
+         }
+      });
+     }
+     // end khadeeja's edit
+           
         
     </script>
 

@@ -2,11 +2,14 @@
 
 
 namespace App\Http\Controllers;
+use Illuminate\Support\Facades\Log;
 
 use DB;
 use App\Models\Addon;
 use Illuminate\Http\Request;
 use App\Models\Order;
+use App\Models\Customer;
+use App\Models\OrderLink;
 use App\Http\Controllers\Controller;
 
 class NotificationController extends Controller
@@ -263,40 +266,392 @@ class NotificationController extends Controller
         }
 
     }
-
-    // Dummy msg for testing purpose
-    public function send_sms(){
-        $phone_no       = "03139120034";
-        $sender         = "WASHUP";
-        $msg            = "It is just a msg!!!!!!";
-        $url            = "https://Bsms.its.com.pk/api.php?key=9f77fe75fea7771ae3b311a64b840c66";
-
-        $dataArray      = array(
-            "receiver"  => $phone_no,
-            "msgdata"   => $msg,
-            "sender"    => $sender
-        );
-
-
-        $ch             = curl_init();
-        $data           = http_build_query($dataArray);
-        
-        $getUrl         = $url."&".$data;
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, TRUE);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-        curl_setopt($ch, CURLOPT_URL, $getUrl);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 80);
-
-        $response       = curl_exec($ch);
-
-        if(curl_error($ch)){
-            echo 'Request Error:' . curl_error($ch);
-        }else{
-            echo $response;
+ public function viewOrder($uuid)
+    {
+        $orderLink = OrderLink::where('uuid', $uuid)->first();
+            if (!$orderLink) {
+             abort(404);   // Show "Not Found" page
         }
-        curl_close($ch);
+    else {
+        $order_id = $orderLink->order_id;
+         $orders               = DB::table('orders')
+                                ->leftjoin('customers', 'customers.id', '=', 'orders.customer_id')
+                                ->where('orders.id', $order_id)
+                                ->select(
+                                            'orders.*',
+                                            DB::raw('DATE_FORMAT(orders.pickup_date, "%d-%m-%Y") as pickup_date'),
+                                            DB::raw('DATE_FORMAT(orders.delivery_date, "%d-%m-%Y") as delivery_date'),
+                                            'customers.name as customer_name',
+                                            'customers.contact_no as contact_no',
+                                            'customers.email as customer_email',
+                                        )
+                                ->first();
+                                // dd($orders);
+
+        if($orders !=null){
+
+            // $d_charges                  = $this->fn_get_delivery_charges();
+            // $service_tot                = $this->fn_get_service_amount($order_id);
+            // $addon_tot                  = $this->fn_get_addon_amount($order_id);
+            // $tot                        = ( $service_tot + $addon_tot);
+            // if($tot < ($d_charges->order_amount)){
+            //     $delivery_charges = $d_charges->delivery_charges;   // delivery charges will be applied
+            // }else{
+            //     $delivery_charges = 0;                              // delivery charges will not be applied
+            // }
+            // $orders->delivery_charges = $delivery_charges;
+
+            // if($orders->ref_order_id!= NULL){
+            //     $order_id = $orders->ref_order_id;
+            // }
+
+            $selected_services      = DB::table('order_has_services')
+                                        ->leftjoin('services', 'services.id', '=', 'order_has_services.service_id')
+                                        ->leftjoin('units', 'units.id', '=', 'services.unit_id')
+                                        ->where('order_has_services.order_id', $order_id)
+                                        ->select(
+                                                    'services.id as service_id',
+                                                    'units.id as unit_id',
+                                                    'services.name as service_name',
+                                                    'order_has_services.weight as weight',
+                                                    'order_has_services.qty as service_qty',
+                                                )
+                                        ->get()
+                                        ->all();
+
+                                        // dd($selected_services)  ;
+
+                                            $record = array();
+            foreach ($selected_services as $service_key => $service_value) {
+
+                if($service_value->unit_id == 2){
+
+                    // unit id : 2 means item wise rate
+                    $selected_items         = DB::table('order_has_items')
+                                                ->leftjoin('items', 'items.id', '=', 'order_has_items.item_id')
+                                                // ->leftjoin('customer_has_items', 'customer_has_items.item_id', '=', 'order_has_items.item_id')
+                                                ->leftjoin('services', 'services.id', '=', 'order_has_items.service_id')
+                                                // ->leftjoin('order_has_services', 'order_has_services.order_id', '=', 'order_has_items.order_id')
+                                                ->where('order_has_items.order_id', $order_id)
+                                                // ->where('customer_has_items.service_id', $service_value->service_id)
+                                                // ->where('customer_has_items.customer_id', $orders->customer_id)
+                                                ->where('order_has_items.service_id', $service_value->service_id)
+                                                ->select(
+                                                            'items.id as item_id',
+                                                            'items.short_name as item_name',
+                                                            'order_has_items.service_id as service_id',
+                                                            'order_has_items.pickup_qty as pickup_qty',
+                                                            'services.name as service_name',
+                                                            // 'customer_has_items.item_rate as item_rate',
+                                                            'order_has_items.cus_item_rate as item_rate',
+                                                            'order_has_items.id as ord_itm_id'
+                                                        )
+                                                ->get()
+                                                ->all();
+
+                }else{
+                    $selected_items         = DB::table('order_has_items')
+                                                ->leftjoin('items', 'items.id', '=', 'order_has_items.item_id')
+                                                ->leftjoin('services', 'services.id', '=', 'order_has_items.service_id')
+                                                ->leftjoin('order_has_services', 'order_has_services.service_id', '=', 'order_has_items.service_id')
+                                                ->where('order_has_items.order_id', $order_id)
+                                                ->where('order_has_services.order_id', $order_id)
+                                                ->where('order_has_items.service_id', $service_value->service_id)
+                                                ->select(
+                                                            'items.id as item_id',
+                                                            'items.short_name as item_name',
+                                                            'order_has_items.service_id as service_id',
+                                                            'order_has_items.pickup_qty as pickup_qty',
+                                                            'order_has_services.cus_service_rate as service_rate',
+                                                            'services.name as service_name',
+                                                            'order_has_items.id as ord_itm_id'
+                                                        )
+                                                ->get()
+                                                ->all();
+                                                // dd($selected_items);
+                }
+
+
+                // $addons = array();
+
+                foreach ($selected_items as $item_key => $item_value) {
+                    $selected_addons        = DB::table('order_has_addons')
+                                                ->leftjoin('addons', 'addons.id', '=', 'order_has_addons.addon_id')
+                                                ->where('order_has_addons.order_id', $order_id)
+                                                ->where('order_has_addons.service_id', $service_value->service_id)
+                                                ->where('order_has_addons.item_id', $item_value->item_id)
+                                                ->where('order_has_addons.ord_itm_id', $item_value->ord_itm_id)
+                                                ->select('addons.id as addon_id',
+                                                        'addons.name as addon_name',
+                                                        // 'addons.rate as addon_rate',
+                                                        'order_has_addons.cus_addon_rate as addon_rate',
+                                                        'order_has_addons.item_id as item_id',
+                                                        'order_has_addons.service_id as service_id',
+                                                        'order_has_addons.ord_itm_id as ord_itm_id',
+                                                        )
+                                                ->get()
+                                                ->all();
+
+                    $selected_items[$item_key]->addons = $selected_addons;
+
+
+                }
+
+                $record[$service_value->service_id]         = $service_value;
+                $record[$service_value->service_id]->items  = $selected_items;
+
+            }
+
+          
+          
+
+
+        }else{
+            return 0;
+        }
+       
+        //(!$orderLink || now()->diffInMinutes($orderLink->created_at) > 1)
+    
+        $order = $orderLink->order;
+   
+   
+        return view('orders.order_summary', compact('orders','record'));
     }
+    }
+    // for sending invoice link
+
+  public function send_sms($orderId)
+{
+    $order = Order::findOrFail($orderId);
+    $customer = $order->customer_id;
+    $customer_id = Customer::findOrFail($customer);
+    $customer_number = $customer_id->contact_no;
+    $customer_numberint = preg_replace('/\D/', '', $customer_id->contact_no);
+
+    // Delete expired order links (older than 7 days)
+    OrderLink::where('created_at', '<', now()->subDay(7))->delete();
+
+    // Create a new order link
+    $orderLink = OrderLink::create([
+        'order_id'    => $order->id,
+        'customer_id' => $order->customer_id,
+    ]);
+
+    $uuid = $orderLink->uuid;
+    $longUrl = "https://dev.washup.com.pk/order/view/" . $uuid;
+
+    // ðŸ”— Shorten the URL using publicapi.dev
+    $shortUrl = $this->shortenUrl($longUrl);
+    
+
+    $phone_no = $customer_numberint; // Replace with dynamic customer number
+    $sender   = "WASHUP";
+
+    $msg = "Hi, your WASHUP invoice for Order #{$order->id} is here: {$shortUrl}. Expires in 7 days. Need help? Call 0317-LAUNDRY(5286379).";
+
+    $url = "https://Bsms.its.com.pk/api.php?key=9f77fe75fea7771ae3b311a64b840c66";
+
+    $dataArray = [
+        "receiver" => $phone_no,
+        "msgdata"  => $msg,
+        "sender"   => $sender
+    ];
+
+    $ch = curl_init();
+    $data = http_build_query($dataArray);
+
+    $getUrl = $url . "&" . $data;
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_URL, $getUrl);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 80);
+
+  $response = curl_exec($ch);
+
+    if (curl_error($ch)) {
+        echo 'Request Error:' . curl_error($ch);
+        return false; // Return false if there's an error
+    }
+
+    curl_close($ch);
+
+    // Decode response to check if the status is success
+    $responseData = json_decode($response, true);
+
+    // Check if the status is 'Success' and return true if successful
+    if (isset($responseData['response']['status']) && $responseData['response']['status'] === 'Success') {
+        // Optionally log the message ID and valid number
+        Log::info("Message ID: " . $responseData['response']['numberlist'][0]['msgid']);
+        Log::info("Number: " . $responseData['response']['numberlist'][0]['number']);
+  
+        return true; // Return true for successful SMS
+    } else {
+        // Handle failure
+        return false; // Return false if the status isn't success
+    }
+    
+}
+
+
+public function shortenUrl($longUrl)
+{
+    $apiUrl = "https://cleanuri.com/api/v1/shorten";
+
+    $payload = http_build_query(['url' => $longUrl]);
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $apiUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    $data = json_decode($response, true);
+
+    if (isset($data['result_url'])) {
+        return $data['result_url'];
+    }
+
+    return $longUrl;
+}
+
+
+
+
+// public function send_modifiedsms($orderId)
+// {
+//     $order = Order::findOrFail($orderId);
+   
+//     $customer = $order->customer_id;
+//     $customer_id = Customer::findOrFail($customer);
+//     $customer_number = $customer_id->contact_no;
+//     $customer_numberint = preg_replace('/\D/', '', $customer_id->contact_no);
+
+//     // Check if an existing order link exists and delete it
+//     $existingOrderLink = OrderLink::where('order_id', $orderId)->first();
+//     if ($existingOrderLink) {
+//         $existingOrderLink->delete();
+//     }
+
+//     // Create a new UUID link with user_id
+//     $orderLink = OrderLink::create([
+//         'order_id'    => $order->id,
+//         'customer_id' => $order->customer_id,
+//     ]);
+
+//     // Update order table with new order_link_id
+//     $order->order_link_id = $orderLink->id;
+//     $order->save();
+
+//     $uuid = $orderLink->uuid;
+//     $link = "https://dev.washup.com.pk/order/view/" . $uuid;
+
+//     $phone_no = $customer_numberint;
+//     $sender   = "WASHUP";
+
+//     $msg = "Hi, your WASHUP invoice for Order #{$order->id} has been updated. View revised invoice here: {$link}. Previous link is now invalid. Link expires in 7 days.";
+
+//     $url = "https://Bsms.its.com.pk/api.php?key=9f77fe75fea7771ae3b311a64b840c66";
+
+//     $dataArray = [
+//         "receiver" => $phone_no,
+//         "msgdata"  => $msg,
+//         "sender"   => $sender
+//     ];
+
+//  $ch = curl_init();
+//     $data = http_build_query($dataArray);
+
+//     $getUrl = $url . "&" . $data;
+//     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+//     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+//     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+//     curl_setopt($ch, CURLOPT_URL, $getUrl);
+//     curl_setopt($ch, CURLOPT_TIMEOUT, 80);
+
+//     $response = curl_exec($ch);
+//     curl_close($ch);
+
+//     Log::info("SMS API Response: " . $response); // âœ… Log API response for debugging
+// // Decode the JSON response
+// $responseData = json_decode($response, true);
+
+// // Extract status value
+// $status = $responseData['response']['status'] ?? null;
+  
+//     if ($status === 'Success') { 
+//         return true;
+//     } else {
+//         return false;
+//     }
+// }
+public function send_modifiedsms($orderId)
+{
+    $order = Order::findOrFail($orderId);
+   
+    $customer = $order->customer_id;
+    $customer_id = Customer::findOrFail($customer);
+    $customer_number = $customer_id->contact_no;
+    $customer_numberint = preg_replace('/\D/', '', $customer_id->contact_no);
+
+    // Check if an existing order link exists and delete it
+    $existingOrderLink = OrderLink::where('order_id', $orderId)->first();
+    if ($existingOrderLink) {
+        $existingOrderLink->delete();
+    }
+
+    // Create a new UUID link with user_id
+    $orderLink = OrderLink::create([
+        'order_id'    => $order->id,
+        'customer_id' => $order->customer_id,
+    ]);
+
+    // Update order table with new order_link_id
+    $order->order_link_id = $orderLink->id;
+    $order->save();
+
+    $uuid = $orderLink->uuid;
+    $longLink = "https://dev.washup.com.pk/order/view/" . $uuid;
+
+    // 🔗 Shorten the long link
+    $shortLink = $this->shortenUrl($longLink);
+
+    $phone_no = $customer_numberint;
+    $sender   = "WASHUP";
+
+    $msg = "Hi, your WASHUP invoice for Order #{$order->id} has been updated. View revised invoice here: {$shortLink}. Previous link is now invalid. Link expires in 7 days.";
+
+    $url = "https://Bsms.its.com.pk/api.php?key=9f77fe75fea7771ae3b311a64b840c66";
+
+    $dataArray = [
+        "receiver" => $phone_no,
+        "msgdata"  => $msg,
+        "sender"   => $sender
+    ];
+
+    $ch = curl_init();
+    $data = http_build_query($dataArray);
+
+    $getUrl = $url . "&" . $data;
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_URL, $getUrl);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 80);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    Log::info("SMS API Response: " . $response);
+
+    $responseData = json_decode($response, true);
+    $status = $responseData['response']['status'] ?? null;
+  
+    return $status === 'Success';
+}
 
     // connection and setting up curl to send msg
     public function send_msg($dataArray){
@@ -332,7 +687,7 @@ class NotificationController extends Controller
         }
     }
     
-    // Pickup Confirmation (Trigger – when order is booked by CSR on Dashboard)
+    // Pickup Confirmation (Trigger â€“ when order is booked by CSR on Dashboard)
     public function pickup_msg($order_id){
         $msg_id             = 1;
         $data               = ($this->get_order_detail($order_id,$msg_id));
@@ -340,7 +695,7 @@ class NotificationController extends Controller
             $dt             = date_create($data->pickup_date);
             $contact_no     = $data->contact_no;
             $sender         = "WASHUP";
-            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be collected on ".(date_format( $dt ,"d F, Y"))." between ".($data->pickup_timeslot)." – (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
+            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be collected on ".(date_format( $dt ,"d F, Y"))." between ".($data->pickup_timeslot)." â€“ (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
             $msg            = "Hi ". ucwords($data->name). ", we will pick your laundry on ".(date_format( $dt ,"d F, Y"))." between ".($data->pickup_timeslot)."\r\nCall/WhatsApp: 03175286379 ";
             
             $dataArray      = array(
@@ -356,7 +711,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Drop off Confirmation (Trigger – when dropoff is booked by CSR on Dashboard)
+    // Drop off Confirmation (Trigger â€“ when dropoff is booked by CSR on Dashboard)
     public function drop_msg($order_id){
         $msg_id             = 2;
         $data               = ($this->get_order_detail($order_id,$msg_id));
@@ -364,7 +719,7 @@ class NotificationController extends Controller
             $dt             = date_create($data->delivery_date);
             $contact_no     = $data->contact_no;
             $sender         = "WASHUP";
-            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be delivered on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)." – (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
+            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be delivered on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)." â€“ (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
             $msg            = "Hi ". ucwords($data->name). ", we will drop your laundry on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)."\r\nCall/WhatsApp: 03175286379 ";
             
             $dataArray      = array(
@@ -380,7 +735,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Pickup & Delivery Confirmation (Trigger – when pickup & dropoff is booked by CSR on Dashboard)
+    // Pickup & Delivery Confirmation (Trigger â€“ when pickup & dropoff is booked by CSR on Dashboard)
     public function pick_n_drop_msg($order_id){
         $msg_id             = 3;
         $data               = ($this->get_order_detail($order_id,$msg_id));
@@ -388,7 +743,7 @@ class NotificationController extends Controller
             $dt             = date_create($data->delivery_date);
             $contact_no     = $data->contact_no;
             $sender         = "WASHUP";
-            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be delivered on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)." – (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
+            // $msg            = "Hi ". ucwords($data->name). ",your laundry will be delivered on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)." â€“ (Name, Date, Timeslot)\r\nFor any changes Call/WhatsApp: 03175286379 ";
             $msg            = "Hi ". ucwords($data->name). ", we will pick & drop your laundry on ".(date_format( $dt ,"d F, Y"))." between ".($data->delivery_timeslot)." \r\nCall/WhatsApp: 03175286379 ";
             
             $dataArray      = array(
@@ -404,7 +759,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Complain (Trigger – when a complaint is added by the CSR in the dashboard)
+    // Complain (Trigger â€“ when a complaint is added by the CSR in the dashboard)
     public function complaint_msg($order_id){
         $msg_id             = 7;
 
@@ -449,7 +804,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Pickup Details – (Trigger When final order is pressed by rider for existing location)
+    // Pickup Details â€“ (Trigger When final order is pressed by rider for existing location)
     public function pickup_detail($order_id){
         $msg_id             = 2;
         $msg                = "";
@@ -506,9 +861,9 @@ class NotificationController extends Controller
         }
     }
 
-    // Order modification (Qty Changed) – (Trigger when the complete order has been verified by the tagger – SMS only to be sent if there is a change in Qty – if no change then NO SMS REQUIRED)
-    // Order modification (Weight Changed) – (Trigger when the complete order has been verified by the tagger – SMS only to be sent if there is a change in WEIGHT – if no change as the rider NO SMS REQUIRED
-    // Order modification (Qty & Weight Changed) – (Trigger when the complete order has been verified by the tagger – SMS only to be sent if there is a change in Qty & WEIGHT – if no change as the rider NO SMS REQUIRED)
+    // Order modification (Qty Changed) â€“ (Trigger when the complete order has been verified by the tagger â€“ SMS only to be sent if there is a change in Qty â€“ if no change then NO SMS REQUIRED)
+    // Order modification (Weight Changed) â€“ (Trigger when the complete order has been verified by the tagger â€“ SMS only to be sent if there is a change in WEIGHT â€“ if no change as the rider NO SMS REQUIRED
+    // Order modification (Qty & Weight Changed) â€“ (Trigger when the complete order has been verified by the tagger â€“ SMS only to be sent if there is a change in Qty & WEIGHT â€“ if no change as the rider NO SMS REQUIRED)
     public function order_modified($order_id){
         $qty_change         = false; 
         $weight_change      = false; 
@@ -685,7 +1040,7 @@ class NotificationController extends Controller
 
     }
     
-    // Last Mile Pickup (Trigger – when the rider has completed an order and is on the way to the customer’s house): 
+    // Last Mile Pickup (Trigger â€“ when the rider has completed an order and is on the way to the customerâ€™s house): 
     // this function will be called from "last_mile function
     public function last_mile_pickup($rec){
         if(isset($rec)){
@@ -714,7 +1069,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Last Mile Delivery (Trigger – when the rider has completed an order and is on the way to the customer’s house)
+    // Last Mile Delivery (Trigger â€“ when the rider has completed an order and is on the way to the customerâ€™s house)
     // this function will be called from "last_mile function
     public function last_mile_drop($rec){
         if(isset($rec->order_id)){
@@ -751,7 +1106,7 @@ class NotificationController extends Controller
         }
     }
 
-    // Last Mile Pick & Drop (Trigger – when the rider has completed an order and is on the way to the customer’s house): 
+    // Last Mile Pick & Drop (Trigger â€“ when the rider has completed an order and is on the way to the customerâ€™s house): 
     // this function will be called from "last_mile function
     public function last_mile_pick_n_drop($rec){
         if(isset($rec)){
@@ -894,14 +1249,14 @@ class NotificationController extends Controller
         
     }
 
-    // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with No show option):
+    // Rider Cancellation (Pickup) â€“ (Trigger when Rider cancels pickup with No show option):
     public function rider_cancel_pick($order_id){
         $msg_id             = 11; // 11: cancel message notification
         $data               = ($this->get_order_detail($order_id,$msg_id));
         if(isset($data)){
             $contact_no     = $data->contact_no;
             $sender         = "WASHUP";
-            $msg            = "Hi ". ucwords($data->name). ", our rider mentioned he came to your doorstep but didn’t receive the laundry as no one was available to give the laundry\r\nCall/WhatsApp: 03175286379";
+            $msg            = "Hi ". ucwords($data->name). ", our rider mentioned he came to your doorstep but didnâ€™t receive the laundry as no one was available to give the laundry\r\nCall/WhatsApp: 03175286379";
             $dataArray      = array(
                 "receiver"  => $contact_no,
                 "msgdata"   => $msg,
@@ -915,14 +1270,14 @@ class NotificationController extends Controller
         }
     }
 
-    // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with too expensive option):
+    // Rider Cancellation (Pickup) â€“ (Trigger when Rider cancels pickup with too expensive option):
     public function rider_cancel_pickup($order_id){
         $msg_id             = 11; // 11: cancel message notification
         $data               = ($this->get_order_detail($order_id,$msg_id));
         if(isset($data)){
             $contact_no     = $data->contact_no;
             $sender         = "WASHUP";
-            $msg            = "Hi ". ucwords($data->name). ", our rider mentioned he came to your doorstep but didn’t receive the laundry as you weren’t satisfied with the charges\r\nCall/WhatsApp: 03175286379";
+            $msg            = "Hi ". ucwords($data->name). ", our rider mentioned he came to your doorstep but didnâ€™t receive the laundry as you werenâ€™t satisfied with the charges\r\nCall/WhatsApp: 03175286379";
             $dataArray      = array(
                 "receiver"  => $contact_no,
                 "msgdata"   => $msg,
@@ -936,7 +1291,7 @@ class NotificationController extends Controller
         }
     }
 
-     // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with other option):
+     // Rider Cancellation (Pickup) â€“ (Trigger when Rider cancels pickup with other option):
      public function rider_cancel_other($order_id){
         $msg_id             = 11; // 11: cancel message notification
         $data               = ($this->get_order_detail($order_id,$msg_id));
@@ -957,7 +1312,7 @@ class NotificationController extends Controller
         }
     }
 
-    // HFQ SMS – (Trigger when HFQ has been created for an order by the packer on dashboard)
+    // HFQ SMS â€“ (Trigger when HFQ has been created for an order by the packer on dashboard)
     public function fn_hfq($order_id){
         // because, in new SMS doc, this sms was removed.
         return true;

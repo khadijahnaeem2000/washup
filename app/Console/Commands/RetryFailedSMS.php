@@ -1,0 +1,98 @@
+<?php
+
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+use App\Models\Order;
+use Illuminate\Support\Facades\Log;
+use App\Http\Controllers\NotificationController;
+use Illuminate\Support\Facades\Mail;
+
+class RetryFailedSMS extends Command
+{
+    protected $signature = 'sms:retry {order_id}';
+    protected $description = 'Send SMS for a specific order and retry if needed';
+
+    public function __construct()
+    {
+        parent::__construct();
+    }
+
+public function handle()
+{
+    $orderId = $this->argument('order_id'); // Get the order ID passed to the cron job
+
+    Log::info("Starting SMS process for Order ID: {$orderId}");
+
+    // Fetch the specific order with a database lock to prevent concurrency
+    $order = Order::where('id', $orderId)->lockForUpdate()->first();
+
+    if (!$order) {
+        Log::error("Order ID: {$orderId} not found.");
+        return;
+    }
+
+    if ($order->sms_sent) {
+        Log::info("Order ID: {$orderId} already sent SMS. Skipping...");
+        return;
+    }
+
+    $this->sendSmsWithRetries($order);
+}
+
+private function sendSmsWithRetries($order)
+{
+    $maxRetries = 2;
+
+    // Check if the SMS has already been sent successfully before starting retries
+    if ($order->sms_sent) {
+        Log::info("✅ SMS already sent for Order ID: {$order->id}. No need to retry.");
+        return;
+    }
+
+    for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+        try {
+            // Send the SMS
+            $response = (new NotificationController)->send_sms($order->id);
+
+            // If the SMS was sent successfully, stop retrying
+            if ($response === true) {
+                Log::info("✅ SMS sent successfully for Order ID: {$order->id} on attempt {$attempt}.");
+
+                // Update order status in the database
+                $order->update([
+                    'sms_sent' => true,
+                    'sms_delivery_status' => "Success",
+                    'sms_retry_count' => $attempt,
+                    'sms_failure_reason' => null
+                ]);
+
+      
+                return; // Exit function after successful SMS
+            } else {
+                Log::error("❌ SMS failed for Order ID: {$order->id} on attempt {$attempt}. Retrying...");
+
+                // Update the failure reason in the database
+                $order->update([
+                    'sms_retry_count' => $attempt,
+                    'sms_delivery_status' => "Failed",
+                    'sms_failure_reason' => $response
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error("⚠️ Error sending SMS for Order ID: {$order->id}. " . $e->getMessage());
+        }
+    }
+
+    // If all retries failed, send an email to the admin
+    Log::error("🚨 SMS completely failed for Order ID: {$order->id} after 2 attempts. Notifying admin...");
+    Mail::raw("SMS failed for Order ID: {$order->id} after 2 attempts. Reason: {$order->sms_failure_reason}", function ($message) use ($order) {
+        $message->to('admin@washup.com')->subject("🚨 SMS Failure Alert for Order ID: {$order->id}");
+    });
+}
+
+
+
+
+
+}

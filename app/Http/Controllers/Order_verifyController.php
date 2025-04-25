@@ -1,10 +1,12 @@
 <?php
 namespace App\Http\Controllers;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use App\Http\Controllers\Controller;
 use DB;
 use Auth;
 use Validator;
+use Carbon\Carbon;
 use DataTables;
 use App\Models\Order;
 use App\Models\Status;
@@ -20,6 +22,8 @@ use App\Models\Distribution_hub;
 use App\Models\Complaint_nature;
 use App\Models\Order_has_service;
 use App\Models\Wash_house_has_zone;
+use App\Mail\customMail;
+use App\Http\Controllers\MailController;
 use App\Models\Customer_has_wallet;
 use App\Models\Wash_house_has_order;
 use App\Models\Wash_house_has_hub;
@@ -72,6 +76,52 @@ class Order_verifyController extends Controller
                     );
     }
 
+
+       public function waver_deliverys(Request $request)
+            {
+    // Retrieve the IDs from the request
+    $ids = $request->ids;
+
+    // Check if IDs are provided
+    if ($ids && count($ids) > 0) {
+        try {
+            $currentDateTime                = Carbon::now()->format('Y-m-d H:i:s');
+            $user                           =Auth::user()->id;
+            // Update orders with the provided IDs
+            Order::whereIn('id', $ids)->update(['waver_delivery' => 1,'delivery_charges'=> 0,'phase'=> "Inspect Order",'DW_when'=>$currentDateTime,'DW_who'=>$user]);
+
+            // Call send_invoice function for each order
+            foreach ($ids as $order_id) {
+                // Retrieve order details
+                $order = Order::findOrFail($order_id);
+                
+                // Check if email alert is on for this order
+                $email_alert = $this->is_email_alert_on($order_id);
+
+                // Send invoice and handle response
+                if ($email_alert == 1) {
+                    $mail = app('App\Http\Controllers\MailController')->send_invoice($order_id);
+                    if ($mail == 1) {
+                        $msg = "Order verified and email sent successfully.";
+                    } else {
+                        $msg = "Order verified but email not sent successfully.";
+                    }
+                } else {
+                    $msg = "Order verified successfully.";
+                }
+            }
+
+            // If all invoices sent successfully, return success response
+            return response()->json(['success' => true, 'message' => 'Orders updated successfully and invoices sent']);
+        } catch (\Exception $e) {
+            // Handle any exceptions
+            return response()->json(['success' => false, 'message' => 'Error updating orders: ' . $e->getMessage()]);
+        }
+    } else {
+        // No IDs provided
+        return response()->json(['success' => false, 'message' => 'No IDs were provided']);
+    }
+}
     public function list($hub_id)
     {
                   DB::statement(DB::raw('set @srno=0'));
@@ -123,7 +173,9 @@ class Order_verifyController extends Controller
                         </a>
                     </div>';
                 })
-                ->rawColumns(['','action'])
+
+                 ->addColumn('checkbox','<div class="checkbox-inline"> <label class="checkbox checkbox-success"><input type="checkbox" name="order_id[{{$id}}]" /><span></span> </label></div>')
+                ->rawColumns(['checkbox','','action'])
                 ->make(true);
             //     <a class="btn btn-success  btn-sm chk_prm" href="order_verifies/special_verify/'.$data->id.'" id="'.$data->id.'">
             //     <i class="fas fa-pencil-alt"></i>
@@ -158,6 +210,72 @@ class Order_verifyController extends Controller
                 
         return view('order_verifies.create',compact('statuses','data','order_detail_natures'));
     }
+
+public function waver_delivery_request(Request $request)
+{
+    $ids = $request->ids;
+
+    if ($ids && count($ids) > 0) {
+        try {
+            $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+            $user = Auth::user()->id;
+
+            // Update all orders with waver_delivery, delivery_charges, etc.
+            Order::whereIn('id', $ids)->update([
+                'waver_delivery' => 1,
+                'delivery_charges' => 0,
+                'phase' => "Verify Order",
+                'DW_when' => $currentDateTime,
+                'DW_who' => $user
+            ]);
+
+            $messages = [];
+
+            foreach ($ids as $order_id) {
+                $order = Order::findOrFail($order_id);
+                $email_alert = $this->is_email_alert_on($order_id);
+
+                if ($email_alert == 1) {
+                    $mail = app('App\Http\Controllers\MailController')->send_invoice($order_id);
+                    if ($mail == 1) {
+                        $messages[] = "Email sent successfully for order ID $order_id.";
+                    } else {
+                        $messages[] = "Email failed for order ID $order_id.";
+                    }
+                } else {
+                    $messages[] = "Email not required for order ID $order_id.";
+                }
+
+                // Notify, reset SMS status and call SMS retry for each order
+                app('App\Http\Controllers\NotificationController')->order_modified($order_id);
+
+                Order::where('id', $order_id)->update([
+                    'sms_sent' => 0,
+                    'sms_retry_count' => 0,
+                    'sms_delivery_status' => "Pending"
+                ]);
+
+                Artisan::call('sms:modifiedretry', ['order_id' => $order_id]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Orders updated successfully.',
+                'details' => $messages
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error updating orders: ' . $e->getMessage()
+            ]);
+        }
+    } else {
+        return response()->json([
+            'success' => false,
+            'message' => 'No IDs were provided'
+        ]);
+    }
+}
 
     public function store(Request $request)
     {
@@ -212,7 +330,7 @@ class Order_verifyController extends Controller
 
             $services               = DB::table('customer_has_services')
                                         ->leftjoin('services', 'services.id', '=', 'customer_has_services.service_id')
-                                        ->orderBy('id')
+                                        ->orderBy('customer_has_services.order_number','ASC')
                                         ->select('services.id','services.name','services.rate')
                                         ->where('customer_has_services.status','1')
                                         ->where('customer_has_services.customer_id', $customer_id)
@@ -257,6 +375,7 @@ class Order_verifyController extends Controller
                                                     'services.name as service_name',
                                                     'order_has_services.weight as service_weight',
                                                     'order_has_services.qty as service_qty')
+                                            ->orderBy('order_has_services.order_number','ASC')
                                             ->get()
                                             ->all();        
 
@@ -921,6 +1040,7 @@ class Order_verifyController extends Controller
         $data                   = Order::orderBy('orders.created_at','DESC')
                                     ->leftjoin('customers', 'customers.id', '=', 'orders.customer_id')
                                     ->leftjoin('statuses', 'statuses.id', '=', 'orders.status_id')
+                                    ->leftjoin('users','users.id','=','orders.DW_who')
                                     ->select(
                                                 'orders.id',
                                                 'customers.id as customer_id',
@@ -928,12 +1048,17 @@ class Order_verifyController extends Controller
                                                 'customers.contact_no',
                                                 'orders.id as order_id',
                                                 'orders.pickup_date',
+                                                'orders.waver_delivery',
                                                 'customers.permanent_note',
                                                 'orders.order_note',
                                                 'orders.rider_note',
                                                 'orders.delivery_date',
                                                 'statuses.name as status_name',
-                                                'orders.ref_order_id'
+                                                'orders.ref_order_id',
+                                                'orders.phase',
+                                                'users.name as order_DW_who',
+                                                'orders.DW_when',
+                                                
                                             )
                                     // ->whereNull('orders.delivery_rider_id')
                                     ->whereNotNull('orders.pickup_rider_id')
@@ -955,6 +1080,7 @@ class Order_verifyController extends Controller
                                                 'order_has_services.weight as weight',
                                                 'order_has_services.qty as service_qty'
                                                 )
+                                        ->orderBy('order_has_services.order_number','ASC')
                                         ->get()
                                         ->all();   
                                         
@@ -1314,7 +1440,7 @@ class Order_verifyController extends Controller
 
             $services               = DB::table('customer_has_services')
                                         ->leftjoin('services', 'services.id', '=', 'customer_has_services.service_id')
-                                        ->orderBy('id')
+                                        ->orderBy('customer_has_services.order_number','ASC')
                                         ->select('services.id','services.name','services.rate')
                                         ->where('customer_has_services.status','1')
                                         ->where('customer_has_services.customer_id', $customer_id)
@@ -1359,6 +1485,7 @@ class Order_verifyController extends Controller
                                                     'services.name as service_name',
                                                     'order_has_services.weight as service_weight',
                                                     'order_has_services.qty as service_qty')
+                                            ->orderBy('order_has_services.order_number','ASC')
                                             ->get()
                                             ->all();        
 
@@ -1809,9 +1936,51 @@ class Order_verifyController extends Controller
             
                 // sum service and addon rates
                 $amount_tot               = ( $service_tot + $addon_tot);
+                $wavier                   = $data->waver_delivery;
+          
+                $customer                 = $data->customer_id;
+                $id_order                 = $order_id;
 
-                // get delivery charges
-                $d_amount                 = $this->fn_add_delivery_charges($amount_tot);
+
+                $today                    = Carbon::today();
+
+
+                $orderIds                 = Order::where('customer_id', $customer)->whereDate('created_at', $today)->pluck('id');
+
+                $totalAmount              = 0;
+
+
+                foreach ($orderIds as $id)  
+                {
+  
+                  if ($id == $id_order) 
+                  {
+                    continue;
+                  }
+
+
+                 $service_tot              = $this->fn_get_service_amount($id);
+
+
+                 $addon_tot                = $this->fn_get_addon_amount($id);
+
+
+                 $amount_tots              = $service_tot + $addon_tot;
+
+                 $totalAmount              += $amount_tots;
+                }
+
+                $grandTotal                = $totalAmount + $amount_tot ;
+              
+
+                    
+                if($wavier === 1 || $grandTotal >700){
+                    $d_amount             = 0;
+                }
+                else{
+                  $d_amount                 = $this->fn_add_delivery_charges($amount_tot);  
+                }
+         
                 $temp_amount              = ($d_amount + $amount_tot); //  sum of items and addons and delivery charges
                 $vat_amount               = $this->fn_add_vat_charges($temp_amount);
 
@@ -1892,6 +2061,12 @@ class Order_verifyController extends Controller
 
                 if(isset($order_id)){
                     (new NotificationController)->order_modified($order_id);
+                                    Order::where('id', $order_id)->update([
+                                    'sms_sent' => 0, // This tells the cron job to send SMS
+                                    'sms_retry_count' => 0,
+                                      'sms_delivery_status' => "Pending"// Reset retry count for new orders
+                                            ]);
+                     Artisan::call('sms:modifiedretry', ['order_id' => $order_id]);
                 }
                 return response()->json(['success'=>$msg]);
             } else {

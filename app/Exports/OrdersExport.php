@@ -21,86 +21,54 @@ class OrdersExport implements FromCollection,  WithHeadings
 
     public function collection()
     {
-        $data   = DB::table('orders')
-                    ->leftjoin('customers', 'customers.id', '=', 'orders.customer_id')
-                    ->leftjoin('wash_house_has_orders', 'wash_house_has_orders.order_id', '=', 'orders.id')
-                    ->leftjoin('wash_houses', 'wash_houses.id', '=', 'wash_house_has_orders.wash_house_id')
-                    ->select(
-                                'orders.id as order_id',
-                                'orders.pickup_date',
-                                'customers.name',
-                                'customers.contact_no',
-                                'wash_houses.name as washhouse_name',
-                                DB::raw(
-                                            '(CASE 
-                                                WHEN ISNULL(orders.vat_charges) THEN "0"
-                                                ELSE orders.vat_charges
-                                                END
-                                            ) AS vat_charges'
-                                ),
-                                DB::raw(
-                                    '(CASE 
-                                        WHEN ISNULL(orders.delivery_charges) THEN "0"
-                                        ELSE orders.delivery_charges
-                                        END
-                                    ) AS delivery_charges'
-                                ),
-                                // 'orders.vat_charges',
-                                // 'orders.delivery_charges',
-                            )
-                    ->whereDate('orders.pickup_date','>=', ($this->from_date))  
-                    ->whereDate('orders.pickup_date','<=', ($this->to_date)) 
-                    ->get();
-
+        $data = DB::table('orders')
+            ->leftjoin('customers', 'customers.id', '=', 'orders.customer_id')
+            ->leftjoin('wash_house_has_orders', 'wash_house_has_orders.order_id', '=', 'orders.id')
+            ->leftjoin('wash_houses', 'wash_houses.id', '=', 'wash_house_has_orders.wash_house_id')
+            ->leftjoin('order_has_items', 'order_has_items.order_id', '=', 'orders.id')
+            ->select(
+                'orders.id as order_id',
+                'orders.pickup_date',
+                'customers.name',
+                'customers.contact_no',
+                'wash_houses.name as washhouse_name',
+                DB::raw('(CASE WHEN ISNULL(orders.vat_charges) THEN "0" ELSE orders.vat_charges END) AS vat_charges'),
+                DB::raw('(CASE WHEN ISNULL(orders.delivery_charges) THEN "0" ELSE orders.delivery_charges END) AS delivery_charges'),
+                DB::raw('SUM(order_has_items.pickup_qty) as total_pieces') // Summing up the pieces per order
+            )
+            ->whereDate('orders.pickup_date', '>=', $this->from_date)
+            ->whereDate('orders.pickup_date', '<=', $this->to_date)
+            ->groupBy('orders.id')
+            ->get();
+    
         foreach ($data as $key => $value) {
             $rec = $this->calc_invoice($value->order_id);
-            // dd($rec);
-            if((isset($rec['service_total']))  &&  ($rec['service_total'] > 0) ){
-                $data[$key]->service_total = $rec['service_total'];
-            }else{
-                $data[$key]->service_total = "0";
-            }
-
-
-            if((isset($rec['addon_total']))  &&  ($rec['addon_total'] > 0) ){
-                $data[$key]->addon_total = $rec['addon_total'];
-            }else{
-                $data[$key]->addon_total = "0";
-            }
-
-            if((isset($rec['service_total']))  &&  ($rec['service_total'] > 0) ){
-                $data[$key]->invoice         = ($data[$key]->service_total) + ($data[$key]->addon_total) + ($value->vat_charges) + ($value->delivery_charges);
-            }else{
-                $data[$key]->invoice         = 0;
-            }
-
-           
-
             
-            
+            $data[$key]->service_total = $rec['service_total'] ?? "0";
+            $data[$key]->addon_total = $rec['addon_total'] ?? "0";
+            $data[$key]->invoice = ($data[$key]->service_total + $data[$key]->addon_total + $value->vat_charges + $value->delivery_charges);
         }
-
-      
-       
-        return  $data;
+    
+        return $data;
     }
-
+    
     public function headings(): array
     {
         return [
             'Order#',
             'Pickup Date',
-            'Customer name',
+            'Customer Name',
             'Customer No#',
-            'washhouse_name',
-            'VAT Charges ',
+            'Washhouse Name',
+            'VAT Charges',
             'Delivery Charges',
+            'Total Pieces', // New column
             'Service Amount',
             'Addon Amount',
-            'Invoice',
-            
+            'Invoicess',
         ];
     }
+    
 
     public function calc_invoice($order_id) {
 

@@ -6,6 +6,7 @@ use Validator;
 use DataTables;
 use App\Models\Order;
 use App\Models\Status;
+use Carbon\Carbon;
 use App\Models\Service;
 use App\Models\Complaint;
 use Illuminate\Http\Request;
@@ -13,6 +14,7 @@ use App\Models\Order_history;
 use App\Models\Order_has_bag;
 use App\Models\Order_has_item;
 use App\Models\Order_has_addon;
+use App\Http\Controllers\MailController;
 use App\Models\Distribution_hub;
 use App\Models\Complaint_nature;
 use App\Models\Order_has_service;
@@ -64,6 +66,72 @@ class Order_inspectController extends Controller
         } 
         return view('order_inspects.index',compact('hubs'));
     }
+    
+public function waver_delivery_request(Request $request)
+{
+    $ids = $request->ids;
+
+    if ($ids && count($ids) > 0) {
+        try {
+            $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+            $user = Auth::user()->id;
+
+            // Update all orders with waver_delivery, delivery_charges, etc.
+            Order::whereIn('id', $ids)->update([
+                'waver_delivery' => 1,
+                'delivery_charges' => 0,
+                'phase' => "Verify Order",
+                'DW_when' => $currentDateTime,
+                'DW_who' => $user
+            ]);
+
+            $messages = [];
+
+            foreach ($ids as $order_id) {
+                $order = Order::findOrFail($order_id);
+                $email_alert = $this->is_email_alert_on($order_id);
+
+                if ($email_alert == 1) {
+                    $mail = app('App\Http\Controllers\MailController')->send_invoice($order_id);
+                    if ($mail == 1) {
+                        $messages[] = "Email sent successfully for order ID $order_id.";
+                    } else {
+                        $messages[] = "Email failed for order ID $order_id.";
+                    }
+                } else {
+                    $messages[] = "Email not required for order ID $order_id.";
+                }
+
+                // Notify, reset SMS status and call SMS retry for each order
+                app('App\Http\Controllers\NotificationController')->order_modified($order_id);
+
+                Order::where('id', $order_id)->update([
+                    'sms_sent' => 0,
+                    'sms_retry_count' => 0,
+                    'sms_delivery_status' => "Pending"
+                ]);
+
+                Artisan::call('sms:modifiedretry', ['order_id' => $order_id]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Orders updated successfully.',
+                'details' => $messages
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error updating orders: ' . $e->getMessage()
+            ]);
+        }
+    } else {
+        return response()->json([
+            'success' => false,
+            'message' => 'No IDs were provided'
+        ]);
+    }
+}
 
     public function list($hub_id)
     {
@@ -143,110 +211,81 @@ class Order_inspectController extends Controller
     }
 
     // updating order status for "receiving to hub from wash_houses" //
+ 
     public function store(Request $request)
     {
-        $asgnd_ids              = array();
-        $not_asgnd_ids          = array();
-        $msg                    = "";
-        
-        // updating order status for "receiving to hub from wash_houses" //
-        $validator = Validator::make($request->all(), 
-            [
-                'hub_id'                => 'required|numeric|min:1',
-                'order_id'              => 'required'
-            ],
-            [
-                'hub_id.required'       => 'Please select hub id(s)!',
-                'order_id.required'     => 'Please select order(s)!',
-            ]
-        );
+        $asgnd_ids = [];
+        $not_asgnd_ids = [];
+        $msg = "";
+        $state = "error"; // Default state
+
+        // Validating the request
+        $validator = Validator::make($request->all(), [
+            'hub_id' => 'required|numeric|min:1',
+            'order_id' => 'required|array',
+            'order_id.*' => 'numeric|min:1', // Validate each order ID in the array
+        ], [
+            'hub_id.required' => 'Please select hub id(s)!',
+            'order_id.required' => 'Please select order(s)!',
+        ]);
 
         if ($validator->passes()) {
-            // 11: recieved to hub
-            $status                     = 11;
-            $order_ids                  = $request['order_id'];
-            if( $order_ids){
+            // 11: received to hub
+            $status = 11;
+            $order_ids = $request->input('order_id');
 
-                foreach($order_ids as $key  => $value){
-                    $input['order_id']      = $key;
-                    $input['status_id2']    = $status;
-                    // 10: Moved to wash-house
+            foreach ($order_ids as $order_id) {
+                // Find the order
+                $order = Order::find($order_id);
 
-                    //Update order status in Orders table//
-                    $order                  = Order::find($key);
-
-                    $last_status            = DB::table('order_histories')
-                                                ->select('order_histories.status_id')
-                                                ->where('order_histories.order_id',$key)
-                                                ->where('order_histories.status_id', 11 ) //11 : recieved to hub already no need to reassign it
-                                                ->first();
-
-
-                    if(isset($last_status->status_id)){
-                        array_push($not_asgnd_ids,$key);
-                        continue;
-                    }
-                            
-                    // if ($order->status_id2 != 10){
-                    //     if ($order->status_id2 == 11){
-                    //         array_push($not_asgnd_ids,$key);
-                    //         continue;
-                    //         // return response()->json(['error'=>"Order already received to hub!!"]);
-                    //     }
-                    //     continue;
-                    //     // return response()->json(['error'=>"Order: ".$key." status not match!!"]);
-                    // }
-                    $order->update($input);
-
-                    //Insert order status in Order_history table//
-                    $val                    = new Order_history();
-                    $val->order_id          = $key;
-                    $val->created_by        = Auth::user()->id;
-                    $val->status_id         = $status;
-                    $val->save();
-
-                    array_push($asgnd_ids,$key);
+                // Check if order exists
+                if (!$order) {
+                    array_push($not_asgnd_ids, $order_id);
+                    continue;
                 }
 
-                $state                      = "success";
-                if( (count($asgnd_ids) > 0) && (count($not_asgnd_ids) > 0) ){
-                    
-                    $not_asgnd_ids              = implode(", ",$not_asgnd_ids);
-                    // $not_asgnd_ids          = implode(", ",$not_asgnd_ids);
-                    // $msg                    = "Order(s): [".$asgnd_ids."] assigned successfully but orders(s): [".$not_asgnd_ids."] are already assigned";
-                    $msg                    = "Order(s) assigned successfully but orders(s): [".$not_asgnd_ids."] are already assigned";
+                // Check if the order is already received to hub
+                $last_status = Order_history::where('order_id', $order_id)
+                    ->where('status_id', $status)
+                    ->first();
 
-                }elseif( (count($asgnd_ids) > 0) && (count($not_asgnd_ids) == 0) ){
-                    // $asgnd_ids              = implode(", ",$asgnd_ids);
-                    // $msg                    = "Order(s): [".$asgnd_ids."] assigned successfully";
-                    $msg                    = "Order(s) assigned successfully";
-                }elseif( (count($asgnd_ids)  == 0) && (count($not_asgnd_ids) > 0) ){
-                    $not_asgnd_ids              = implode(", ",$not_asgnd_ids);
-                    // $msg                    = "Order(s): [".$asgnd_ids."] assigned successfully";
-                    $state                      = "error";
-                    $msg                    = "Order(s): [".$not_asgnd_ids."] are already assigned";
-                }else{
-                    $state                  = "error";
-                    $msg                    = "something went wrong";
-
+                if ($last_status) {
+                    array_push($not_asgnd_ids, $order_id);
+                    continue;
                 }
 
+                // Update order status
+                $order->update(['status_id2' => $status]);
 
-                return response()->json([$state=>$msg]);
-            }else{
-                $status                     = "error";
-                $msg                        = "No order found! Please select order";
-                return response()->json([$state=>$msg]);
+                // Insert order status in Order_history table
+                $order_history = new Order_history();
+                $order_history->order_id = $order_id;
+                $order_history->created_by = Auth::user()->id;
+                $order_history->status_id = $status;
+                $order_history->save();
+
+                array_push($asgnd_ids, $order_id);
             }
-           
 
-        }else{
-            // return response()->json(['error'=>[0=>""]]);
-            return response()->json(['error'=>$validator->errors()->all()]);
+            // Generate response message
+            if (count($asgnd_ids) > 0) {
+                $state = "success";
+                $msg = "Order(s) assigned successfully";
+            } else {
+                $msg = "No valid orders found or already received to hub";
+            }
+        } else {
+            // Validation failed, generate error message
+            $msg = $validator->errors()->first();
         }
 
-        return redirect()->route('order_inspects.index')
-                         ->with($status,$msg);   
+        // Prepare response
+        $response = [
+            $state => $msg,
+            'not_asgnd_ids' => $not_asgnd_ids
+        ];
+
+        return response()->json($response);
     }
 
     public function show($id)
@@ -259,6 +298,7 @@ class Order_inspectController extends Controller
                                             'customers.name',
                                             'customers.contact_no',
                                             'orders.id as order_id',
+                                            'orders.waver_delivery',
                                             'orders.pickup_date',
                                             'customers.permanent_note',
                                             'orders.order_note',
@@ -277,6 +317,7 @@ class Order_inspectController extends Controller
                                                  'services.name as service_name',
                                                  'order_has_services.weight as service_weight',
                                                  'order_has_services.qty as service_qty')
+                                        ->orderBy('order_has_services.order_number','ASC')
                                         ->get()
                                         ->all();  
                                         
@@ -634,6 +675,7 @@ class Order_inspectController extends Controller
                                                     'services.name as service_name',
                                                     'order_has_services.weight as service_weight',
                                                     'order_has_services.qty as service_qty')
+                                            ->orderBy('order_has_services.order_number','ASC')
                                             ->get()
                                             ->all();        
 

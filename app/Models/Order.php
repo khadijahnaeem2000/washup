@@ -25,7 +25,7 @@ class Order extends Model
         'delivery_address',
         'delivery_timeslot_id',
         'delivery_timeslot',
-
+        'waver_delivery',
 
         'tags_printed',
         'iron_rating',
@@ -40,5 +40,15 @@ class Order extends Model
         'status_id',
         'created_by',
         'updated_by',
+        'phase',
+        'DW_when',
+        'DW_who',
+        'invoice_send',
+        'sms_sent',
+        'sms_delivery_status',
+        'sms_retry_count',
+        'sms_failure_reason',
+        'order_link_id'
     ];
+ 
 }

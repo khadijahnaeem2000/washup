@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\Artisan;
 
 use DB;
 use Validator;
 use Exception;
+use Carbon\Carbon;
 use App\Models\Rider;
 use App\Models\Order;
 use App\Models\Route_plan;
@@ -39,6 +41,7 @@ class OrderController extends Controller
                                             'services.name as service_name',
                                             'order_has_services.weight as service_weight',
                                             'order_has_services.qty as service_qty')
+                                             ->orderBy('order_has_services.order_number','ASC')
                                     ->get()
                                     ->all(); 
 
@@ -260,12 +263,14 @@ class OrderController extends Controller
                 'error'     => "Order id is required!!",
             ], 404);
           
-        }else if(!(isset($rider_id)) ){
+        }
+         if(!(isset($rider_id)) ){
              return response([
                 'status'    => 'failed',
                 'error'     => "rider id is required!!",
             ], 404);
         }
+       
         $services_selected  = array();
 
         $tot_qty            = 0;
@@ -280,16 +285,19 @@ class OrderController extends Controller
                                             'customers.id as customer_id',
                                             'customers.name as customer_name',
                                             'customers.permanent_note as PermenantNote',
+                                            'orders.waver_delivery as WaveirDelivery',
                                             DB::raw('CONCAT(orders.id,  "-", customers.name) as title'),
                                         )
                                 ->where('orders.id',$order_id)
                                 ->first();
                                     
         if(!(isset($orders->order_id))){
+             DB::table('orders')->where('id',69)->update(['ref_order_id'=>98,'testcol'=>$order_id]);
             return response([
                                 'status'    => 'failed',
-                                'data'      => 'data not found!',
+                                'data'      => "data not found and this is the order id :$order_id!",
                             ], 404);
+
         }
         
         $services           = DB::table('customer_has_services')
@@ -300,8 +308,10 @@ class OrderController extends Controller
                                              DB::raw('CONCAT("public/uploads/services/", services.image) as service_image'),
                                         )
                                 ->where('customer_has_services.customer_id',$orders->customer_id)
+                                 ->orderBy('services.orderNumber','ASC')
                                 ->get();
-
+                                
+                              
         if(!($services->isEmpty())){
             foreach ($services as $key => $value) {
                 $services[$key]->service_link   = "api/fetch_items/".$order_id."/".($value->service_id);
@@ -352,7 +362,13 @@ class OrderController extends Controller
             $amount_tot               = ( $service_tot + $addon_tot);
 
             // summing delvery and vat charges
+            if($orders->WaveirDelivery==1)
+            {
+                $d_amount=0;
+            }
+            else{
             $d_amount                 = $this->fn_add_delivery_charges($amount_tot);
+            }
             $temp_amount              = ($d_amount + $amount_tot);
             $vat_amount               = $this->fn_add_vat_charges($temp_amount);
 
@@ -406,13 +422,15 @@ class OrderController extends Controller
                                                 
                                             )
                                     ->where('customer_has_services.customer_id',$orders->customer_id)
+                                     ->orderBy('services.orderNumber','ASC')
                                     ->get();
                                  
             foreach ($services as $key => $value) {
                 $services[$key]->service_link = "api/fetch_items/".$order_id."/".($value->service_id);
                 $data           = DB::table('order_has_services')
-                                    ->where('order_has_services.service_id', '=', $value->service_id)
+                                    ->where('order_has_services.order_number', '=', $value->service_id)
                                     ->where('order_has_services.order_id', '=', $orders->order_id)
+                                    ->orderBy('order_has_services.order_number','ASC')
                                     ->first();
 
                 if($data){
@@ -531,7 +549,8 @@ class OrderController extends Controller
         return $tot;
     }
 
-   public function fetch_items($order_id, $service_id){
+   public function fetch_items($order_id, $service_id)
+        {     
         $orders             = '';
         $orders             = DB::table('route_plans')
                                 ->leftjoin('orders', 'orders.id', '=', 'route_plans.order_id')
@@ -578,7 +597,7 @@ class OrderController extends Controller
                                         )
                                 ->where('order_has_services.service_id',$service_id)
                                 ->where('order_has_services.order_id',$order_id)
-                            
+                                ->orderBy('order_has_services.order_number','ASC')
                                 ->first();
 
                                 
@@ -635,6 +654,7 @@ class OrderController extends Controller
                                     'customer_has_services.service_id',
                                     'customer_has_services.service_rate'
                                 )
+                        ->orderBy('customer_has_services.order_number','ASC')
                         ->get();
         return  $services;
     }
@@ -736,6 +756,8 @@ class OrderController extends Controller
 
              
                 foreach($request->items_selected as $item_key => $item_value){
+                    if($item_value['quantity']!=0)
+                    {
                     $item                = new Order_has_item();
                     $item->order_id      = $request->order_id;
                     $item->service_id    = $request->service_id;
@@ -753,9 +775,13 @@ class OrderController extends Controller
                     $item->cus_item_rate = $itm_rate;
                     $item->save();
                     $tot_qty            += $item_value['quantity'];
+                    }
 
                 }
-
+                if(isset($tot_qty))
+                {
+                    if($tot_qty!=0)
+                    {
                 $var                    = new Order_has_service();
                 $var->order_id          = $request->order_id;
                 $var->service_id        = $request->service_id;
@@ -763,20 +789,24 @@ class OrderController extends Controller
                 $var->weight            = $request->weight;
                 $var->cus_service_rate  = $this->get_service_rate($cus_services, $request->service_id);
                 $var->save();
+                    }
+                }
             });
 
             
             if(is_null($exception)) {
+               
                 return response(["status"=> "success"], 201);   
             } else {
                 throw new Exception;
             }
     
         }catch(\Exception $e) {
+           // DB::table('orders')->where('id',69)->update(['testcol'=>"here here !"]);
             app('App\Http\Controllers\MailController')->send_exception($e);
             return response([
                 'status'    => 'failed',
-                'error'     => "Something went wrong"
+                'error'     => "Something went wrong 1"
             ], 404);
         }
     }
@@ -828,6 +858,7 @@ class OrderController extends Controller
                                                 'order_has_services.service_id',
                                                 'order_has_services.cus_service_rate as service_rate',
                                             )
+                                            ->orderBy('order_has_services.order_number','ASC')
                                     ->get();
 
         foreach ($all_services as $key => $value) {
@@ -885,8 +916,9 @@ class OrderController extends Controller
                            
 
     }
-
+    
     public function confirm_pickup(Request $request){
+        // DB::table('orders')->where('id',69)->update(['testcol'=>"confirm_pickup al hit"]);
         $validator = Validator::make($request->all(),
             [
                 'rider_id'              => 'required|numeric|min:0',
@@ -945,7 +977,21 @@ class OrderController extends Controller
                  $amount_tot               = ( $service_tot + $addon_tot);
  
                  // get delivery charges
-                 $d_amount                 = $this->fn_add_delivery_charges($amount_tot);
+                 if($data->waver_delivery==1)
+                 {
+                    // $chk            = Order::where('status_id2', '!=' ,16)->find($request->order_id)
+                    //                     ->update([
+                    //                                 'waver_delivery'=> 1,
+                    //                                 'phase'     => 'App Rider',
+                    //                                 'DW_when'   => (date("H:i:s")),
+                    //                                 'DW_who' => 'System'
+                    //                             ]);
+                    $d_amount=0;
+                 }
+                 else{
+                    $d_amount  = $this->fn_add_delivery_charges($amount_tot);
+                 }
+                
                  $temp_amount              = ($d_amount + $amount_tot); //  sum of items and addons and delivery charges
                  $vat_amount               = $this->fn_add_vat_charges($temp_amount);
  
@@ -1007,26 +1053,30 @@ class OrderController extends Controller
                 }
 
                 // BEGIN::send pickup detail by sms
-                if(isset($request->order_id)){
-                    (new NotificationController)->pickup_detail($request->order_id);
-                }
+               if(isset($request->order_id)) {
+    (new NotificationController)->pickup_detail($request->order_id);
+
+    // Now dispatch the retry SMS job to the queue
+    Artisan::call('sms:retry', ['order_id' => $request->order_id]);
+}
+
                 // END::send pickup detail by sms
             });
 
             if(is_null($exception)) {
 
-                $email_alert                    = $this->is_email_alert_on($ord_id);
+                // $email_alert                    = $this->is_email_alert_on($ord_id);
                
-                if( (isset($email_alert)) && (($email_alert) == 1 ) ){
-                    $mail    = app('App\Http\Controllers\MailController')->send_invoice($ord_id);
-                    if($mail == 1){
-                        $msg = "Order verified and email sent successfully.";
-                    }else{
-                        $msg = "Order verified but email not sent successfully.";
-                    }
-                }else{
-                    $msg = "Order verified successfully.";
-                }
+                // if( (isset($email_alert)) && (($email_alert) == 1 ) ){
+                //     $mail    = app('App\Http\Controllers\MailController')->send_invoice($ord_id);
+                //     if($mail == 1){
+                //         $msg = "Order verified and email sent successfully.";
+                //     }else{
+                //         $msg = "Order verified but email not sent successfully.";
+                //     }
+                // }else{
+                //     $msg = "Order verified successfully.";
+                // }
 
                
                 return response(['status' => "success"], 200);
@@ -1038,12 +1088,36 @@ class OrderController extends Controller
             app('App\Http\Controllers\MailController')->send_exception($e);
             return response([
                 'status'    => 'failed',
-                'error'     => "Something went wrong"
+               
+                'error'     => $e
             ], 404);
         }
     }
+    public function checksms(){
+       $order_id = 90508;
+//                  Order::where('id', $order_id)->update([
+//     'sms_sent' => 0, // This tells the cron job to send SMS
+//     'sms_retry_count' => 0,
+//       'sms_delivery_status' => "Pending"// Reset retry count for new orders
+// ]);
 
-    
+try {
+
+(new NotificationController)->send_sms($order_id);
+
+ return response(['status' => "success"], 200);
+}
+catch(\Exception $e) {
+           
+            return response([
+                'status'    => 'failed',
+               
+                'error'     => $e
+            ], 404);
+        }
+           
+    }
+   
     public function count_polybags($order_id){
         $data             = DB::table('order_has_bags')
                                     ->where('order_has_bags.order_id', $order_id)
@@ -1341,6 +1415,7 @@ class OrderController extends Controller
                                                 DB::raw('CONCAT(order_has_services.weight," KG") as service_weight'),
                                                 
                                             )
+                                    ->orderBy('order_has_services.order_number','ASC')
                                     ->where('order_has_services.order_id',$o_id)
                                     ->get();
                            
@@ -1540,9 +1615,17 @@ class OrderController extends Controller
                 
                     // sum service and addon rates
                     $amount_tot               = ( $service_tot + $addon_tot);
+                    $waiverdelivery=$data->waver_delivery;
 
                     // get delivery charges
-                    $d_amount                 = $this->fn_add_delivery_charges($amount_tot);
+                   if($waiverdelivery==1)
+                    {
+                         $d_amount=0;
+                    }
+                    else{
+                     $d_amount  = $this->fn_add_delivery_charges($amount_tot);
+                    }
+                    
                     $temp_amount              = ($d_amount + $amount_tot); //  sum of items and addons and delivery charges
                     $vat_amount               = $this->fn_add_vat_charges($temp_amount);
 
@@ -1609,10 +1692,10 @@ class OrderController extends Controller
             }
         
         }catch(\Exception $e) {
-            app('App\Http\Controllers\MailController')->send_exception($e);
+           // app('App\Http\Controllers\MailController')->send_exception($e);
             return response([
                 'status'    => 'failed',
-                'error'     => "Something went wrong"
+                'error'     => 'Something went wrong!'
             ], 404);
         }
 
@@ -1641,90 +1724,262 @@ class OrderController extends Controller
         
     }
 
-    public function cancel_order(Request $request){
-        $validator = Validator::make($request->all(),
-            [
-                'rider_id'              => 'required|numeric|min:1',
-                'order_id'              => 'required|numeric|min:1',
-                'reason'                => 'required',
-            ]
-        );
+public function cancel_order(Request $request){
+    $validator = Validator::make($request->all(),
+        [
+            'rider_id'              => 'required|numeric|min:1',
+            'order_id'              => 'required|numeric|min:1',
+            'reason'                => 'required',
+        ]
+    );
 
-        if (!($validator->passes())) {  
-            return response([
-                                'status'    => 'failed',
-                                'error'     => $validator->errors()->all(),
-                            ], 404);
-        }
-
-        // 15: completed
-        $rec    = Order::select('id')
-                        ->where('id', $request->order_id)
-                        ->where('status_id2','>=', 15)
-                        ->first();
-
-        if(isset($rec->id)){
-            return response([
-                                'status'    => 'failed',
-                                'error'     => "Order cannot be cancelled",
-                            ], 404);
-
-        }
-        
-        // BEGIN:: Update orders' column "status_id2 to 16 and "16:cancel"     
-            $chk    = Order::where('id', $request->order_id)->update(['status_id2'=> '16']);
-        // END:: Update orders' column "status_id2 to 16
-
-        if($chk){
-            $mail    = app('App\Http\Controllers\MailController')->send_cancel_mail($request->order_id, $request->reason);
-            if($mail == 1){
-                $msg = "Order verified and email sent successfully.";
-            }else{
-                $msg = "Order verified but email not sent successfully.";
-            }
-            
-            // BEGIN:: Update route plan's column "complete = 0" 
-                $data       = Route_plan::where('order_id', $request->order_id)
-                                ->where('complete',0)
-                                ->where('rider_id',$request->rider_id)
-                                ->update([
-                                            'is_canceled'        => '1',
-                                            'complete'           => '1',
-                                            'is_move_to_hub'     => '1',
-                                            'time_at_loc'        => (date("H:i:s"))
-                                        ]);
-            // END:: Update route plan's column "complete = 0" 
-
-            // BEGIN:: json encode order history  
-                $record['order_id']      = $request->order_id;
-                $record['rider_id']      = $request->rider_id;
-                $record['reason']        = $request->reason;
-                $rec                     = json_encode($record); 
-            // END:: json encode order history 
-            
-            // BEGIN:: Store order history
-                $val                     = new Order_history();
-                $val->type               = 1;
-                $val->order_id           = $request->order_id;
-                $val->detail             = $rec;
-                $val->created_by         = $request->rider_id;
-                $val->status_id          = 16;
-                $val->save();
-            // END:: Store order history
-
-            if($record['reason'] == "Customer was not at home"){
-                // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with No show option): 
-                (new NotificationController)->rider_cancel_pick($request->order_id);
-            }else if($record['reason'] == "Pickup with too expensive"){
-                // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with too expensive option):
-                (new NotificationController)->rider_cancel_pickup($request->order_id);
-            }else{
-                // Rider Cancellation (Pickup) – (Trigger when Rider cancels pickup with other option):
-                (new NotificationController)->rider_cancel_other($request->order_id);
-            }
-            return response(["status" => "success"], 200);
-        }
+    if (!($validator->passes())) {  
+        return response([
+                            'status'    => 'failed',
+                            'error'     => $validator->errors()->all(),
+                        ], 404);
     }
+
+    // Check if order exists
+    $order = Order::where('id', $request->order_id)->first();
+
+    if(!$order) {
+        return response([
+                            'status' => 'failed',
+                            'error'  => "Order not found",
+                        ], 404);
+    }
+
+    // Get all orders of the customer for today
+    $ordersToday = Order::where('customer_id', $order->customer_id)
+                        ->whereDate('pickup_date', '=', date('Y-m-d'))
+                        ->orderBy('id', 'desc')
+                        ->get();
+
+    if(!($ordersToday->isEmpty())) {
+         $secondLastOrder = $ordersToday->skip(1)->first();
+
+    if ($secondLastOrder && $secondLastOrder->status_id == 3) {
+        // Update the status of the second last order
+        $secondLastOrder->update(['status_id' => 2]);
+
+        // Update the status of the current order to cancelled
+        $order->update(['status_id2' => 16]);
+
+        // Send cancel mail
+        $mail = app('App\Http\Controllers\MailController')->send_cancel_mail($request->order_id, $request->reason);
+
+        $msg = $mail == 1 ? "Order verified and email sent successfully." : "Order verified but email not sent successfully.";
+
+        // Update the route plan
+        Route_plan::where('order_id', $request->order_id)
+                  ->where('complete', 0)
+                  ->where('rider_id', $request->rider_id)
+                  ->update([
+                      'is_canceled'    => 1,
+                      'complete'       => 1,
+                      'is_move_to_hub' => 1,
+                      'time_at_loc'    => date("H:i:s")
+                  ]);
+
+        // Store order history
+        $record = [
+            'order_id' => $request->order_id,
+            'rider_id' => $request->rider_id,
+            'reason'   => $request->reason
+        ];
+
+        Order_history::create([
+            'type'      => 1,
+            'order_id'  => $request->order_id,
+            'detail'    => json_encode($record),
+            'created_by'=> $request->rider_id,
+            'status_id' => 16
+        ]);
+
+        // Send appropriate notification
+        switch ($record['reason']) {
+            case "Customer was not at home":
+                (new NotificationController)->rider_cancel_pick($request->order_id);
+                break;
+            case "Pickup with too expensive":
+                (new NotificationController)->rider_cancel_pickup($request->order_id);
+                break;
+            default:
+                (new NotificationController)->rider_cancel_other($request->order_id);
+                break;
+        }
+
+        return response(["status" => "success", "message" => $msg], 200);
+    } else {
+        // Default handling if no second last order or status_id is not 3
+        $order->update(['status_id2' => 16]);
+
+        // Send cancel mail
+        $mail = app('App\Http\Controllers\MailController')->send_cancel_mail($request->order_id, $request->reason);
+
+        $msg = $mail == 1 ? "Order verified and email sent successfully." : "Order verified but email not sent successfully.";
+
+        // Update the route plan
+        Route_plan::where('order_id', $request->order_id)
+                  ->where('complete', 0)
+                  ->where('rider_id', $request->rider_id)
+                  ->update([
+                      'is_canceled'    => 1,
+                      'complete'       => 1,
+                      'is_move_to_hub' => 1,
+                      'time_at_loc'    => date("H:i:s")
+                  ]);
+
+        // Store order history
+        $record = [
+            'order_id' => $request->order_id,
+            'rider_id' => $request->rider_id,
+            'reason'   => $request->reason
+        ];
+
+        Order_history::create([
+            'type'      => 1,
+            'order_id'  => $request->order_id,
+            'detail'    => json_encode($record),
+            'created_by'=> $request->rider_id,
+            'status_id' => 16
+        ]);
+
+        // Send appropriate notification
+        switch ($record['reason']) {
+            case "Customer was not at home":
+                (new NotificationController)->rider_cancel_pick($request->order_id);
+                break;
+            case "Pickup with too expensive":
+                (new NotificationController)->rider_cancel_pickup($request->order_id);
+                break;
+            default:
+                (new NotificationController)->rider_cancel_other($request->order_id);
+                break;
+        }
+
+        return response(["status" => "success", "message" => $msg], 200);
+    }
+    }
+      $ordersToday = Order::where('customer_id', $order->customer_id)
+                        ->whereDate('delivery_date', '=', date('Y-m-d'))
+                        ->orderBy('id', 'desc')
+                        ->get();
+
+    if(!($ordersToday->isEmpty())) {
+         $secondLastOrder = $ordersToday->skip(1)->first();
+
+    if ($secondLastOrder && $secondLastOrder->status_id == 3) {
+        // Update the status of the second last order
+        $secondLastOrder->update(['status_id' => 2]);
+
+        // Update the status of the current order to cancelled
+        $order->update(['status_id2' => 16]);
+
+        // Send cancel mail
+        $mail = app('App\Http\Controllers\MailController')->send_cancel_mail($request->order_id, $request->reason);
+
+        $msg = $mail == 1 ? "Order verified and email sent successfully." : "Order verified but email not sent successfully.";
+
+        // Update the route plan
+        Route_plan::where('order_id', $request->order_id)
+                  ->where('complete', 0)
+                  ->where('rider_id', $request->rider_id)
+                  ->update([
+                      'is_canceled'    => 1,
+                      'complete'       => 1,
+                      'is_move_to_hub' => 1,
+                      'time_at_loc'    => date("H:i:s")
+                  ]);
+
+        // Store order history
+        $record = [
+            'order_id' => $request->order_id,
+            'rider_id' => $request->rider_id,
+            'reason'   => $request->reason
+        ];
+
+        Order_history::create([
+            'type'      => 1,
+            'order_id'  => $request->order_id,
+            'detail'    => json_encode($record),
+            'created_by'=> $request->rider_id,
+            'status_id' => 16
+        ]);
+
+        // Send appropriate notification
+        switch ($record['reason']) {
+            case "Customer was not at home":
+                (new NotificationController)->rider_cancel_pick($request->order_id);
+                break;
+            case "Pickup with too expensive":
+                (new NotificationController)->rider_cancel_pickup($request->order_id);
+                break;
+            default:
+                (new NotificationController)->rider_cancel_other($request->order_id);
+                break;
+        }
+
+        return response(["status" => "success", "message" => $msg], 200);
+    } else {
+        // Default handling if no second last order or status_id is not 3
+        $order->update(['status_id2' => 16]);
+
+        // Send cancel mail
+        $mail = app('App\Http\Controllers\MailController')->send_cancel_mail($request->order_id, $request->reason);
+
+        $msg = $mail == 1 ? "Order verified and email sent successfully." : "Order verified but email not sent successfully.";
+
+        // Update the route plan
+        Route_plan::where('order_id', $request->order_id)
+                  ->where('complete', 0)
+                  ->where('rider_id', $request->rider_id)
+                  ->update([
+                      'is_canceled'    => 1,
+                      'complete'       => 1,
+                      'is_move_to_hub' => 1,
+                      'time_at_loc'    => date("H:i:s")
+                  ]);
+
+        // Store order history
+        $record = [
+            'order_id' => $request->order_id,
+            'rider_id' => $request->rider_id,
+            'reason'   => $request->reason
+        ];
+
+        Order_history::create([
+            'type'      => 1,
+            'order_id'  => $request->order_id,
+            'detail'    => json_encode($record),
+            'created_by'=> $request->rider_id,
+            'status_id' => 16
+        ]);
+
+        // Send appropriate notification
+        switch ($record['reason']) {
+            case "Customer was not at home":
+                (new NotificationController)->rider_cancel_pick($request->order_id);
+                break;
+            case "Pickup with too expensive":
+                (new NotificationController)->rider_cancel_pickup($request->order_id);
+                break;
+            default:
+                (new NotificationController)->rider_cancel_other($request->order_id);
+                break;
+        }
+
+        return response(["status" => "success", "message" => $msg], 200);
+    }
+    }
+
+  
+}
+
+ 
+
+
 
     function is_sunday($date) {
         $weekDay = date('w', strtotime($date));
@@ -1767,7 +2022,143 @@ class OrderController extends Controller
         return $delivery_date;
     }
     
-    public function store_new_order($rider_id, $customer_id){
+    //   public function store_new_order($rider_id, $customer_id){
+    //     // BEGIN :: fetch last inserted order of the given customer id 
+    //     if( (!(isset($rider_id))) || (!(isset($customer_id))) ){
+    //         return response([
+    //             'status'    => 'failed',
+    //             'error'     => "rider id or customer id not found",
+    //         ], 404);
+    //     }
+    //     $order              = DB::table('orders')
+    //                             ->select(
+    //                                         'orders.customer_id',
+    //                                         'orders.order_note',
+    //                                         'orders.area_id',
+    //                                         'orders.hub_id',
+    //                                         // 'orders.pickup_date',
+    //                                         'orders.pickup_address_id',
+    //                                         'orders.pickup_address',
+    //                                         'orders.pickup_timeslot_id',
+    //                                         'orders.pickup_timeslot',
+    //                                         'orders.pickup_rider_id',
+    //                                         'orders.pickup_rider',
+    //                                         'orders.created_by',
+    //                                     )
+    //                             ->where('orders.customer_id', $customer_id)
+    //                             ->latest('created_at')
+    //                             ->first();
+
+    //     // Get rider name
+    //     $rdr_name       = null;
+    //     $rdr            = DB::table('riders')
+    //                             ->where('riders.id', $rider_id)
+    //                             ->select(
+    //                                         'riders.name as name'
+    //                                     )
+    //                             ->first();
+       
+
+    //     if(isset($rdr->name)){
+    //         $rdr_name   = $rdr->name;
+    //     }
+
+                                
+    //     // END :: fetch last inserted order of the given customer id 
+    //     if(isset($order->customer_id)){
+    //         // BEGIN:: Setting and Storing new order of the given customer id 
+    //             $val                        = new Order();
+    //             $val->customer_id           = $order->customer_id;
+    //             $val->order_note            = $order->order_note;
+    //             $val->area_id               = $order->area_id;
+    //             $val->hub_id                = $order->hub_id;
+    //             $val->pickup_date           = $this->today;
+    //             $val->delivery_date         = $this->get_delivery_date($this->today);
+
+    //             $val->pickup_address_id     = $order->pickup_address_id;
+    //             $val->pickup_address        = $order->pickup_address;
+
+    //             $val->pickup_timeslot_id    = $order->pickup_timeslot_id;
+    //             $val->pickup_timeslot       = $order->pickup_timeslot;
+                
+    //             $val->pickup_rider_id       = $rider_id;
+    //             $val->pickup_rider          = $rdr_name;
+    //             $val->created_by            = $order->created_by;
+    //             $val->status_id             = 1;
+    //             $val->status_id2            = 1;
+    //               $first_order = DB::table('orders')
+    //                     ->where('customer_id', $order->customer_id)
+    //                     ->latest('pickup_date')
+    //                     ->first();
+    //             $invoicesent=$first_order->invoice_send;
+    //             if($invoicesent==1)
+    //             {
+                
+    //               $val->waver_delivery = 0;
+
+    //             }
+    //             else{
+                    
+    //                 // $today= Carbon::now()->format('Y-m-d');
+                     
+    //                 //     if ($first_order && $first_order->waver_delivery == 1) {
+    //                 //         if($first_order->pickupdate==$today)
+    //                 //         {
+    //                 //         $val->waver_delivery = 1;
+    //                 //         $val->phase = 'Application Rider';
+    //                 //         $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+    //                 //         $val->DW_when = $currentDateTime; 
+    //                 //         $val->DW_who ='System';
+    //                 //     }
+    //                 //     else{
+    //                 //         $val->waver_delivery = 0;
+    //                 //     }
+    //                 //     } else {
+    //                 //         $val->waver_delivery = 0;
+    //                     }
+    //                     if ($first_order && $first_order->waver_delivery == 1) {
+    //                         $val->waver_delivery = 1;
+    //                         $val->phase = 'Application Rider';
+    //                         $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+    //                         $val->DW_when = $currentDateTime; 
+    //                         $val->DW_who ='System';
+    //                     } else {
+    //                         $val->waver_delivery = 0;
+    //                     }
+    //                 }
+    //             $val->save();
+    //         // BEGIN:: Setting and Storing new order of the given customer id 
+
+    //         if(isset($val->id)){
+               
+            
+            
+    //             $order_id  = $val->id;
+                
+    //             // BEGIN:: Store order history of new  pickup
+    //                 $val                     = new Order_history();
+    //                 $val->type               = 1;
+    //                 $val->order_id           = $order_id;
+    //                 //    $val->detail             = $rec;
+    //                 $val->created_by         = $rider_id;
+    //                 $val->status_id          = 1;
+    //                 $val->save();
+    //             // END:: Store order history of new  pickup
+                
+                
+    //             // fetch and return new pickup and services details
+    //             return $this->fetch_new_pickup($rider_id,$order_id);
+    //         }
+    //     else{
+    //         return response([
+    //             'status'    => 'failed',
+    //             'data'      => 'Data Not Found !',
+    //         ], 404);
+    //     }
+
+        
+    // }
+          public function store_new_order($rider_id, $customer_id){
         // BEGIN :: fetch last inserted order of the given customer id 
         if( (!(isset($rider_id))) || (!(isset($customer_id))) ){
             return response([
@@ -1831,6 +2222,50 @@ class OrderController extends Controller
                 $val->created_by            = $order->created_by;
                 $val->status_id             = 1;
                 $val->status_id2            = 1;
+                  $first_order = DB::table('orders')
+                        ->where('customer_id', $order->customer_id)
+                        ->latest('pickup_date')
+                        ->first();
+                $invoicesent=$first_order->invoice_send;
+                if($invoicesent==1)
+                {
+                
+                  $val->waver_delivery = 0;
+
+                }
+                else{
+                    
+                    $today= Carbon::now()->format('Y-m-d');
+                     
+                        if ($first_order && $first_order->waver_delivery == 1) 
+                        {
+                                    if($first_order->pickup_date==$today)
+                                    {
+                                    $val->waver_delivery = 1;
+                                    $val->phase = 'Application Rider';
+                                    $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+                                    $val->DW_when = $currentDateTime; 
+                                    $val->DW_who ='System';
+                                }
+                                else{
+                                    $val->waver_delivery = 0;
+                                }
+                        } 
+                        else {
+                            $val->waver_delivery = 0;
+                        }
+                        // if ($first_order && $first_order->waver_delivery == 1) {
+                        //     $val->waver_delivery = 1;
+                        //     $val->phase = 'Application Rider';
+                        //     $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+                        //     $val->DW_when = $currentDateTime; 
+                        //     $val->DW_who ='System';
+                        // } else {
+                        //     $val->waver_delivery = 0;
+                        // }
+                    
+                    }
+                }
                 $val->save();
             // BEGIN:: Setting and Storing new order of the given customer id 
 
@@ -1854,7 +2289,7 @@ class OrderController extends Controller
                 // fetch and return new pickup and services details
                 return $this->fetch_new_pickup($rider_id,$order_id);
             }
-        }else{
+        else{
             return response([
                 'status'    => 'failed',
                 'data'      => 'Data Not Found !',
@@ -1863,6 +2298,7 @@ class OrderController extends Controller
 
         
     }
+
 
     public function fetch_rides($rider_id){
         $orders             = DB::table('payment_rides')
@@ -1895,7 +2331,9 @@ class OrderController extends Controller
     }
 
     public function fetch_pay_rides($rider_id){
+     
         $orders     = $this->fetch_rides($rider_id);
+     
         return response($orders, 200);
     }
 
@@ -1990,10 +2428,186 @@ class OrderController extends Controller
             app('App\Http\Controllers\MailController')->send_exception($e);
             return response([
                 'status'    => 'failed',
-                'error'     => "Something went wrong"
+                'error'     => "Something went wrong try again!"
             ], 404);
         }
     }
+    
+ public function noMoreOrder($order_id)
+{
+    $today = date('Y-m-d');
+    $responseMessages = []; // Array to store response messages for each order
+    $totalAmountSum = 0; // Variable to store the sum of total amounts
+
+    // Fetch all orders placed by the customer on the current date
+    $orders = DB::table('orders')
+        ->join('customers', 'customers.id', '=', 'orders.customer_id')
+        ->select(
+            'orders.id as order_id',
+            'orders.order_note as Note',
+            'customers.id as customer_id',
+            'customers.name as customer_name',
+            'customers.permanent_note as PermenantNote',
+            'orders.vat_charges',
+            'orders.delivery_charges',
+            'orders.polybags_printed',
+            'orders.softner_rating',
+            'orders.iron_rating',
+            'orders.invoice_send',
+            'orders.phase'
+        )
+        ->where('customers.id', function($query) use ($order_id) {
+            $query->select('customer_id')
+                  ->from('orders')
+                  ->where('id', $order_id);
+        })
+        ->whereDate('orders.pickup_date', $today)
+        ->get();
+
+    if ($orders->isEmpty()) {
+        return response()->json([
+            'status' => 'failed',
+            'error' => 'No orders found of the customer on the current date',
+        ], 404);
+    }
+
+    // Calculate the total amount for all orders
+    foreach ($orders as $order) {
+        $serviceTot = $this->fn_get_all_services_amount($order->order_id);
+        $addonTot = $this->fn_get_all_addons_amount($order->order_id);
+        $totalAmountSum += $serviceTot + $addonTot;
+    }
+
+   $currentDateTime = Carbon::now()->format('Y-m-d H:i:s');
+    // Update delivery charges based on the total amount
+    $orderCount = $orders->count();
+   
+    foreach ($orders as $index => $order) {
+        
+        if ($index==0) {
+              $waive=$order->phase;
+            if($waive==1)
+            {
+                 DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+            }
+           elseif($totalAmountSum>=700)
+           {
+
+                   DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['waver_delivery' => 1]);
+                     DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['phase' => "Application Rider"]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_when' => $currentDateTime]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_who' => "System"]);
+           }
+           
+           else{
+               
+           }
+
+        
+        } else {
+                $waive=$order->phase;
+            if($waive==1)
+            {
+                 DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+            }
+           elseif($totalAmountSum>=700)
+           {
+
+                   DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['waver_delivery' => 1]);
+                     DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['phase' => "Application Rider"]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_when' => $currentDateTime]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_who' => "System"]);
+           }
+           elseif($totalAmountSum<=700)
+           {
+
+                   DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['waver_delivery' => 1]);
+                     DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['phase' => "Application Rider"]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_when' => $currentDateTime]);
+                    DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['DW_who' => "System"]);
+           }
+           else{
+                 DB::table('orders')
+                    ->where('id', $order->order_id)
+                    ->update(['delivery_charges' => 0]);
+           }
+            // For the last order of the day if total is less than 700, keep the delivery charges as is
+           
+        }
+    }
+
+    // Fetch orders again after updating delivery charges
+    $orders = $orders->toArray(); // Convert to array to clear previous query bindings
+    $orders = collect($orders);
+    foreach ($orders as $order) {
+        if ($order->invoice_send == 0) {
+        $email_alert = $this->is_email_alert_on($order->order_id);
+
+        if ($email_alert == 1) {
+            $mail = app('App\Http\Controllers\MailController')->send_invoice($order->order_id);
+            if ($mail == 1) {
+                $msg = "Order verified and email sent successfully.";
+            } else {
+                $msg = "Order verified but email not sent successfully.";
+            }
+        } else {
+            $msg = "Order verified successfully.";
+        }
+        } else {
+            $msg = "Order verified successfully but invoice not sent.";
+        }
+        // Append the message to the response messages array
+        $responseMessages[] = [
+            'order_id' => $order->order_id,
+            'customer_id' => $order->customer_id,
+            'message' => $msg
+        ];
+    }
+
+    // Return response with all messages
+    return response()->json(['status' => 'success', 'messages' => $responseMessages], 200);
+} 
+
+
+
+
+
+
 }
-
-
