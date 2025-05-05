@@ -206,7 +206,7 @@ class CustomerController extends Controller
 
             // Message alerts //
             $message        = $request['message'];
-
+                
 
 
             if($data){
